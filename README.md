@@ -1,12 +1,12 @@
 # PPL-XPL VIS
 
 <p align="center">
-  <img src="assets/ppl-xpl-highlight.gif" alt="PPL-XPL Highlight Demo GIF" />
+  <img src="assets/ppl-xpl_highlight.gif" alt="PPL-XPL Highlight Demo GIF" />
 </p>
 <p align="center">
   <video controls autoplay loop muted width="800">
-    <source src="assets/ppl-xpl-highlight.mp4" type="video/mp4">
-    您的浏览器不支持视频播放，请 <a href="assets/ppl-xpl-highlight.mp4">点击这里观看</a>。
+    <source src="assets/ppl-xpl_highlight.mp4" type="video/mp4">
+    您的浏览器不支持视频播放，请 <a href="assets/ppl-xpl_highlight.mp4">点击这里观看</a>。
   </video>
 </p>
 
