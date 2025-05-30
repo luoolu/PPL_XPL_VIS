@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>偏光图像颗粒可视化工具</title>
+  <style>
+    body, html {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      background: #222; color: #eee;
+      font-family: Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    #controls {
+      margin: 16px;
+      display: flex; flex-wrap: wrap; gap: 16px;
+      align-items: center;
+    }
+    #controls label {
+      font-size: 14px;
+      display: flex; flex-direction: column;
+    }
+    #controls input[type=file],
+    #controls input[type=range] {
+      margin-top: 4px;
+    }
+    #controls span {
+      min-width: 50px;
+      display: inline-block;
+      text-align: center;
+    }
+    #cycleBtn {
+      padding: 6px 12px;
+      font-size: 14px;
+      background: #555; border: none; border-radius: 4px;
+      color: #eee; cursor: pointer;
+      transition: background .2s;
+    }
+    #cycleBtn:hover { background: #666; }
+    canvas {
+      border: 1px solid #444;
+      background: #000;
+      max-width: 90vw;
+      max-height: 80vh;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>
+      PPL 图像：
+      <input type="file" id="pplInput" accept="image/*">
+    </label>
+    <label>
+      XPL 图像（支持多选）：
+      <input type="file" id="xplInput" accept="image/*" multiple>
+    </label>
+    <label>
+      标注 JSON：
+      <input type="file" id="jsonInput" accept=".json,application/json">
+    </label>
+    <label>
+      切换速度：
+      <input type="range" id="speedRange" min="100" max="2000" step="100" value="500">
+      <span id="speedValue">500ms</span>
+    </label>
+    <button id="cycleBtn">自动循环颗粒</button>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+  (function(){
+    const canvas     = document.getElementById('canvas');
+    const ctx        = canvas.getContext('2d');
+    const pplInput   = document.getElementById('pplInput');
+    const xplInput   = document.getElementById('xplInput');
+    const jsonInput  = document.getElementById('jsonInput');
+    const speedRange = document.getElementById('speedRange');
+    const speedVal   = document.getElementById('speedValue');
+    const cycleBtn   = document.getElementById('cycleBtn');
+
+    let baseImg      = new Image();
+    let baseLoaded   = false;
+    let xplImgs      = [];
+    let shapes       = [];
+    let selectedIdx  = -1;
+    let frameIdx     = 0;
+    let frameTimer   = null;
+    let delay        = parseInt(speedRange.value);
+
+    let autoShapes      = false;
+    let shapeCycleTimer = null;
+
+    // 更新速度文本
+    speedRange.addEventListener('input', () => {
+      delay = parseInt(speedRange.value);
+      speedVal.textContent = delay + 'ms';
+      restartFrameCycle();
+    });
+
+    // 加载 PPL 图像
+    pplInput.addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      resetAll();
+      baseLoaded = false;
+      baseImg.src = URL.createObjectURL(file);
+      baseImg.onload = () => {
+        baseLoaded = true;
+        canvas.width  = baseImg.naturalWidth;
+        canvas.height = baseImg.naturalHeight;
+        URL.revokeObjectURL(baseImg.src);
+        draw();
+      };
+    });
+
+    // 加载多张 XPL 图像
+    xplInput.addEventListener('change', e => {
+      const files = Array.from(e.target.files);
+      xplImgs = [];
+      if (!files.length) return;
+      let count = 0;
+      files.forEach(file => {
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+          count++;
+          URL.revokeObjectURL(img.src);
+          if (count === files.length) draw();
+        };
+        xplImgs.push(img);
+      });
+    });
+
+    // 加载 JSON 标注
+    jsonInput.addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          const arr  = data.shapes || data.objects || [];
+          shapes = arr.map(s => {
+            const pts = s.points || [];
+            const p   = new Path2D();
+            if (pts.length) {
+              p.moveTo(pts[0][0], pts[0][1]);
+              for (let i = 1; i < pts.length; i++) {
+                p.lineTo(pts[i][0], pts[i][1]);
+              }
+              p.closePath();
+            }
+            return p;
+          });
+          draw();
+        } catch (err) {
+          console.error('JSON 解析失败', err);
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    // 鼠标移动：手动选中并停止自动循环
+    canvas.addEventListener('mousemove', e => {
+      if (!baseLoaded || !shapes.length || !xplImgs.length) return;
+      if (autoShapes) stopShapeCycle();
+      const [mx, my] = toCanvasCoords(e);
+      let hit = -1;
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        if (ctx.isPointInPath(shapes[i], mx, my)) {
+          hit = i;
+          break;
+        }
+      }
+      if (hit !== selectedIdx) {
+        selectedIdx = hit;
+        frameIdx    = 0;
+        restartFrameCycle();
+        draw();
+      }
+    });
+
+    // 鼠标移出：停止 XPL 循环
+    canvas.addEventListener('mouseleave', () => {
+      if (selectedIdx !== -1) {
+        selectedIdx = -1;
+        stopFrameCycle();
+        draw();
+      }
+    });
+
+    // 自动循环所有颗粒按钮
+    cycleBtn.addEventListener('click', () => {
+      autoShapes
+        ? stopShapeCycle()
+        : startShapeCycle();
+    });
+
+    function startShapeCycle() {
+      if (!shapes.length || !xplImgs.length) return;
+      autoShapes = true;
+      cycleBtn.textContent = '停止循环颗粒';
+      selectedIdx = 0;
+      frameIdx    = 0;
+      draw();
+      restartFrameCycle();
+      const interval = xplImgs.length * delay + delay;
+      shapeCycleTimer = setInterval(() => {
+        selectedIdx = (selectedIdx + 1) % shapes.length;
+        frameIdx    = 0;
+        draw();
+        restartFrameCycle();
+      }, interval);
+    }
+
+    function stopShapeCycle() {
+      autoShapes = false;
+      cycleBtn.textContent = '自动循环颗粒';
+      if (shapeCycleTimer) {
+        clearInterval(shapeCycleTimer);
+        shapeCycleTimer = null;
+      }
+      stopFrameCycle();
+    }
+
+    // 开始或重启 XPL 帧循环
+    function restartFrameCycle() {
+      stopFrameCycle();
+      if (selectedIdx === -1) return;
+      frameTimer = setInterval(() => {
+        frameIdx = (frameIdx + 1) % xplImgs.length;
+        draw();
+      }, delay);
+    }
+
+    function stopFrameCycle() {
+      if (frameTimer) {
+        clearInterval(frameTimer);
+        frameTimer = null;
+      }
+      frameIdx = 0;
+    }
+
+    // 绘制：PPL + 全图暗化 + 打洞高亮 + XPL + 发光描边
+    function draw() {
+      if (!baseLoaded) return;
+      const w = canvas.width, h = canvas.height;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(baseImg, 0, 0);
+
+      if (selectedIdx === -1) return;
+
+      // 暗化全图
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 0, w, h);
+
+      // 打洞
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fill(shapes[selectedIdx]);
+      ctx.restore();
+
+      // XPL 区域
+      ctx.save();
+      ctx.clip(shapes[selectedIdx]);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(xplImgs[frameIdx], 0, 0, w, h);
+      ctx.restore();
+
+      // 发光描边
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.lineWidth   = 3;
+      ctx.strokeStyle = 'deepskyblue';
+      ctx.shadowColor = 'deepskyblue';
+      ctx.shadowBlur  = 20;
+      ctx.stroke(shapes[selectedIdx]);
+      ctx.restore();
+    }
+
+    // 转换鼠标坐标到 Canvas 内部像素
+    function toCanvasCoords(e) {
+      const r = canvas.getBoundingClientRect();
+      return [
+        (e.clientX - r.left) * (canvas.width  / r.width),
+        (e.clientY - r.top ) * (canvas.height / r.height)
+      ];
+    }
+
+    // 重置所有状态
+    function resetAll() {
+      shapes       = [];
+      xplImgs      = [];
+      selectedIdx  = -1;
+      stopFrameCycle();
+      stopShapeCycle();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  })();
+  </script>
+</body>
+</html>
