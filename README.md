@@ -1,4 +1,3 @@
-````markdown
 # PPL-XPL VIS
 
 <p align="center">
@@ -134,4 +133,4 @@
 ---
 
 <p align="center">_Powered by HTML5 Canvas & JavaScript · Geological Thin-Section Visualization_</p>
-```
+
