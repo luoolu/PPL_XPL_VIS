@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mask2Former_PPL-XPL 详细框架</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            line-height: 1.6;
+            color: #333;
+            background-color: #f9f9f9;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #eaecef;
+            padding-bottom: 10px;
+            margin-top: 30px;
+        }
+        h1 {
+            text-align: center;
+            border-bottom: none;
+        }
+        .mermaid {
+            text-align: center;
+            padding: 20px 0;
+            border-radius: 8px;
+            background-color: #f8f9fa;
+        }
+        code {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            background-color: #f0f0f0;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background-color: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        .highlight {
+            font-weight: bold;
+            color: #c0392b;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <h1>Mask2Former_PPL-XPL 详细框架</h1>
+    <p>这是一个针对PPL-XPL任务场景适配的Mask2Former模型。核心改动在于<span class="highlight">网络的最前端（输入层）</span>和<span class="highlight">最后端（输出头与后处理）</span>，而Mask2Former强大的中间部分（像素解码器和Transformer解码器）基本可以保持不变，以充分利用其强大的分割能力。</p>
+
+    <h2>Mask2Former_PPL-XPL 核心框架图</h2>
+    <div class="mermaid">
+    graph TD
+        subgraph "输入 (Input)"
+            Input_BF["明场单偏光图 (BF)"]
+            Input_0["0° 偏光图 (PPL)"]
+            Input_15["15° 偏光图"]
+            Input_30["30° 偏光图"]
+            Input_45["45° 偏光图"]
+            Input_60["60° 偏光图"]
+            Input_75["75° 偏光图"]
+        end
+
+        subgraph "A. 输入处理与融合 (关键改动)"
+            Cat[通道拼接<br>Concatenate Channels]
+            FusionConv["✨ 输入融合卷积层<br>(Conv 21-ch -> 3-ch)"]
+        end
+
+        subgraph "B. Mask2Former 核心网络 (基本不变)"
+            Backbone["主干网络<br>(Swin Transformer)"]
+            PixelDecoder["像素解码器<br>(Pixel Decoder)"]
+            TransformerDecoder["Transformer解码器"]
+        end
+
+        subgraph "C. 输出头与后处理 (关键改动)"
+            ClassHead["分类头 (2类)<br>目标 vs. 背景"]
+            MaskHead["掩码头<br>(N个预测掩码)"]
+            PostProc{"后处理"}
+            Merge["合并所有'目标'掩码<br>(Logical OR / Max)"]
+            FinalMask[/"最终输出掩码<br>HxWx1 (0或255)"/]
+        end
+
+        %% 流程连接
+        Input_BF & Input_0 & Input_15 & Input_30 & Input_45 & Input_60 & Input_75 --> Cat
+        Cat --> InputTensor["HxWx21 张量"]
+        InputTensor --> FusionConv
+        FusionConv --> Backbone
+        Backbone --> PixelDecoder
+        PixelDecoder --> TransformerDecoder
+        TransformerDecoder --> ClassHead & MaskHead
+        ClassHead & MaskHead --> PostProc
+        PostProc --> Merge
+        Merge --> FinalMask
+
+        %% 样式
+        classDef highlight fill:#ffc,stroke:#333,stroke-width:2px;
+        class FusionConv,ClassHead,Merge,FinalMask highlight;
+    </div>
+
+    <h2>各模块关键改动细节</h2>
+
+    <h3>1. 输入层 (Input Stem) 的修改 (关键改动) 🧠</h3>
+    <p>这是整个适配任务中最重要的一步。原始的Mask2Former接受<code>HxWx3</code>的RGB图像，而现在我们需要处理<code>HxWx21</code>的输入。</p>
+
+    <h4>方案：输入融合卷积层 (Input Fusion Convolution Layer)</h4>
+    <p>在主干网络（如Swin Transformer）之前，插入一个简单的卷积层。这个卷积层的任务是将21个通道的信息进行学习和融合，最终压缩成主干网络能够接受的3个通道。</p>
+
+    <h4>为什么这样做？</h4>
+    <ul>
+        <li><strong>利用预训练权重</strong>：像Swin Transformer这样的主干网络是在3通道的ImageNet上预训练的。通过将输入转换为3通道，我们可以最大限度地利用这些强大的预训练权重，而无需从头训练整个网络。</li>
+        <li><strong>自动特征融合</strong>：这个卷积层的权重将通过反向传播自动学习。网络会自己判断来自不同角度（不同通道）的信息的重要性，并学习到最优的融合方式，而不是我们手动设计复杂的融合规则。</li>
+    </ul>
+
+    <h4>实现示例 (PyTorch):</h4>
+    <pre><code># 在你的模型 __init__ 中定义
+# kernel_size=1或3均可，padding='same'保持尺寸不变
+self.input_fusion_conv = nn.Conv2d(
+    in_channels=21,
+    out_channels=3,
+    kernel_size=3,
+    padding='same',
+    bias=False
+)
+
+# 在你的模型 forward 中调用
+# x 的维度是 [B, 21, H, W]
+fused_x = self.input_fusion_conv(x)
+# fused_x 的维度是 [B, 3, H, W]，可以送入后续的backbone
+</code></pre>
+
+    <h3>2. 主干网络 (Backbone) & 像素/Transformer解码器</h3>
+    <p><strong>无需任何改动</strong>。这是此方案最大的优势。一旦输入被融合层处理为<code>HxWx3</code>的张量，后续的所有模块都和原版Mask2Former完全一样，继续它们提取特征、生成查询、并预测掩码的工作。</p>
+
+    <h3>3. 输出头与损失函数的适配 🎯</h3>
+    <p>原始Mask2Former的输出头需要预测多个类别，而我们的任务只有一个目标类别。</p>
+    <ul>
+        <li><strong>分类头 (Classification Head) 的修改</strong>: 原始设置的输出维度为 <code>N x (K+1)</code>。在PPL-XPL任务中，这是一个<span class="highlight">二分类</span>（目标 vs. 背景）问题。因此，需要将分类头的最终输出维度修改为 <code>N x 2</code>。</li>
+        <li><strong>损失函数 (Loss Function)</strong>: 损失函数的类型<strong>保持不变</strong>，依然是分类损失（交叉熵）和掩码损失（BCE + Dice Loss）的组合。它们会自然地适应新的输出维度。</li>
+    </ul>
+
+    <h3>4. 后处理 (Post-Processing) 🔧</h3>
+    <p>网络的直接输出是 <code>N</code> 个预测，每个预测包含一个类别（目标/背景）和一个对应的掩码。我们需要将它们合并成最终的 <code>HxWx1</code> 单张图。</p>
+    <ol>
+        <li><strong>过滤 (Filtering)</strong>：遍历 <code>N</code> 个预测结果。保留所有被分类为“目标”且置信度得分高于某个阈值（例如0.8）的预测。</li>
+        <li><strong>合并 (Merging)</strong>：创建一个全零的<code>HxW</code>画布。将所有通过过滤的预测掩码，通过<strong>逻辑“或”</strong>操作（或逐元素取最大值）绘制到这个画布上。这意味着，只要任何一个被认为是目标的预测掩码将某个像素激活，该像素在最终图中就被激活。</li>
+        <li><strong>格式化输出 (Formatting)</strong>：将合并后的二值掩码（0或1）乘以255，得到最终的<code>0-255</code>灰度图。</li>
+    </ol>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+    mermaid.initialize({ startOnLoad: true });
+</script>
+
+</body>
+</html>

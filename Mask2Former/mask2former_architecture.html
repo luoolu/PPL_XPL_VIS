@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mask2Former 详细网络架构图 (多图分解版)</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            padding: 20px;
+            background-color: #f8f9fa;
+            color: #343a40;
+        }
+        h1, h2 {
+            color: #212529;
+            margin-bottom: 15px;
+            text-align: center;
+            width: 100%;
+        }
+        .mermaid {
+            background-color: #ffffff;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+            max-width: 95%;
+            border: 1px solid #dee2e6;
+            margin-bottom: 40px; /* 图表间距 */
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Mask2Former 详细网络架构图 (多图分解版)</h1>
+
+    <h2>1. 核心架构总览 (Core Architecture Overview)</h2>
+    <div class="mermaid">
+    graph LR
+        subgraph "输入"
+            Input[/"图像(帧)<br>H x W"/]
+        end
+
+        subgraph "A. 主干网络 (Backbone)"
+            SwinT[Swin Transformer]
+            SwinT --> Feats["多尺度特征<br>res3, res4, res5"]
+        end
+
+        subgraph "B. 像素解码器 (Pixel Decoder)"
+            PD["MSDeformAttn FPN"] --> Epixel["像素嵌入 E_pixel<br>(H/4)"]
+            PD --> Fmask["掩码特征 F_mask<br>(H/8)"]
+        end
+
+        subgraph "C. Transformer 解码器"
+            TD["L层堆叠的解码器"] --> Q_final[("最终查询<br>N个")]
+        end
+
+        subgraph "D. 输出头 (Output Heads)"
+            Heads["分类头 & 掩码头"]
+        end
+
+        %% 连接
+        Input --> SwinT
+        Feats --> PD
+        Epixel -.-> TD
+        Queries_in[("N个可学习查询")] --> TD
+        Q_final --> Heads
+        Fmask -.-> Heads
+    </div>
+
+    <h2>2. Transformer 解码器层内部细节</h2>
+    <div class="mermaid">
+    graph LR
+        q_in[("输入查询 Q_in")] --> SelfAttn["1. 查询自注意力<br>(Query Self-Attention)<br><i>抑制重复预测</i>"]
+
+        subgraph "2. 带掩码交叉注意力 (Masked Cross-Attention)"
+            direction TB
+            M_CrossAttn["交叉注意力模块"]
+            TempMask["临时掩码 M_temp<br>(来自上一层查询)"] -- "作为注意力掩码" --> M_CrossAttn
+        end
+
+        SelfAttn --> M_CrossAttn
+        Epixel[("像素嵌入 E_pixel")] -.-> M_CrossAttn
+
+        M_CrossAttn --> FFN["3. 前馈网络<br>(Feed-Forward Network)"]
+        FFN --> q_out[("输出查询 Q_out")]
+    </div>
+
+    <h2>3. 任务适配与后处理</h2>
+    <div class="mermaid">
+    graph TD
+        subgraph "网络输出"
+            ClassProbs["类别概率<br>N x (K+1)"]
+            MaskPreds["掩码预测<br>N x H x W"]
+        end
+
+        subgraph "训练阶段"
+            GT[("标注真值<br>Ground Truth")] --> Matching["匈牙利匹配"]
+            ClassProbs --> Matching
+            MaskPreds --> Matching
+            Matching --> Loss["计算损失<br>分类损失 + 掩码损失"]
+        end
+
+        subgraph "推理与后处理"
+            PostProc{"后处理模块"}
+            ClassProbs --> PostProc
+            MaskPreds --> PostProc
+        end
+
+        PostProc --> Panoptic["全景分割<br>(组合Things/Stuff)"]
+        PostProc --> Instance["实例分割<br>(只保留Things)"]
+        PostProc --> Semantic["语义分割<br>(所有掩码按得分进行像素级Argmax)"]
+    </div>
+
+    <h2>4. 视频分割(VIS)扩展：解码器层修改</h2>
+    <div class="mermaid">
+    graph LR
+        q_in[("当前帧查询")] --> SelfAttn["1. 查询自注意力"]
+        q_prev[("前一帧对应实例的查询")] --> InstAttn
+
+        SelfAttn --> InstAttn["2. 跨帧实例注意力<br>(Instance Attention)<br><i>核心创新：跟踪实例</i>"]
+        InstAttn --> CrossAttn["3. 带掩码交叉注意力"]
+        CrossAttn --> FFN["4. 前馈网络"]
+        FFN --> q_out[("当前帧输出查询")]
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+
+</body>
+</html>
