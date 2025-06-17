@@ -9,6 +9,15 @@
     您的浏览器不支持视频播放，请 <a href="assets/ppl-xpl_highlight.mp4">点击这里观看</a>。
   </video>
 </p>
+<p align="center">
+  <img src="assets/ppl-xpl-ins-vis.gif" alt="PPL-XPL Annotation Demo GIF" />
+</p>
+<p align="center">
+  <video controls autoplay loop muted width="800">
+    <source src="assets/PPL-XPL-INS-VIS.mp4" type="video/mp4">
+    您的浏览器不支持视频播放，请 <a href="assets/PPL-XPL-INS-VIS.mp4">点击这里观看</a>。
+  </video>
+</p>
 
 > **高性能、可交互的偏光／正交偏光（PPL/XPL）颗粒可视化工具**  
 > 纯前端 HTML5 Canvas + JavaScript 实现，支持 LabelMe 标注与多帧 XPL 循环。
